@@ -10,7 +10,28 @@ type DashboardData={weather:Weather;forecast:ForecastPoint[];air:Air|null};
 const API=process.env.NEXT_PUBLIC_API_BASE_URL||"http://127.0.0.1:8000";
 const navItems=[["Overview",LayoutDashboard],["Weather",CloudSun],["Heat Impact",ThermometerSun],["Rainfall",CloudRain],["Air Quality",Wind],["Public Health",HeartPulse],["Map & Reports",MapPin]] as const;
 function Metric({label,value,note,icon:Icon}:{label:string;value:string;note:string;icon:React.ElementType}){return <div className="card"><div style={{display:"flex",justifyContent:"space-between"}}><span className="metric-label">{label}</span><Icon size={17} color="#65cfe1"/></div><div className="metric-value">{value}</div><div className="metric-note">{note}</div></div>}
-function Section({title,subtitle,children}:{title:string;subtitle:string;children:React.ReactNode}){return <><div className="section-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>{children}</>}
+function Section({
+  title,
+  subtitle,
+  children
+}: {
+  title: string;
+  subtitle: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <>
+      <div className="section-head">
+        <div>
+          <h2>{title}</h2>
+          <p>{subtitle}</p>
+        </div>
+      </div>
+      {children}
+    </>
+  );
+}
+
 function Tip({active,payload,label}:{active?:boolean;payload?:Array<{name:string;value:number;color:string}>;label?:string}){if(!active||!payload?.length)return null;return <div style={{background:"#0b1c30",border:"1px solid #36516c",padding:10,borderRadius:9,fontSize:11,color:"#edf5ff"}}><div style={{color:"#91a7c1"}}>{label}</div>{payload.map((p,i)=><div key={i} style={{color:p.color}}>{p.name}: {p.value}</div>)}</div>}
 function csvDownload(rows:ForecastPoint[]){const heads=["datetime","temperature_c","feels_like_c","humidity_pct","rainfall_3h_mm"];const csv=[heads.join(","),...rows.map(r=>heads.map(h=>JSON.stringify(r[h as keyof ForecastPoint]??"")).join(","))].join("\n");const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));const a=document.createElement("a");a.href=url;a.download="nagpur-climate-forecast.csv";a.click();URL.revokeObjectURL(url);}
 export default function Home(){

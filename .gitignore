@@ -5,3 +5,21 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Node.js dependencies
+node_modules/
+**/node_modules/
+
+# Next.js build files
+.next/
+**/.next/
+
+# Python environment
+.venv/
+venv/
+__pycache__/
+
+# Environment variables
+.env
+.env.*
+!.env.example
