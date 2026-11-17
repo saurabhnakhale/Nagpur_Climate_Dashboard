@@ -538,7 +538,7 @@ if scope == "🏙️ Nagpur Urban Core":
         """)
 
         # Synthetic multi-year epidemiological correlation model for Nagpur
-        dates = pd.date_range(end=datetime.now(), periods=12, freq="M")
+        dates = pd.date_range(end=datetime.now(), periods=12, freq="ME")
         epi_data = pd.DataFrame({
             "Month": [d.strftime("%b %Y") for d in dates],
             "Mean_Temp": [24, 28, 34, 40, 42, 36, 31, 29, 30, 29, 25, 23],
@@ -649,11 +649,12 @@ elif scope == "🗺️ Maharashtra State Multi-City":
 
         # Geographic Scatter Map
         st.subheader("📍 Maharashtra Thermal Distribution Map")
-        fig_map = px.scatter_mapbox(
+        map_func = getattr(px, "scatter_map", getattr(px, "scatter_mapbox", None))
+        fig_map = map_func(
             s_df, lat="lat", lon="lon", hover_name="City", hover_data=["Region", "Temperature (°C)", "Humidity (%)", "CPCB AQI"],
             color="Temperature (°C)", size="Temperature (°C)",
             color_continuous_scale="Reds", size_max=16, zoom=5.5,
-            mapbox_style="carto-darkmatter", center={"lat": 19.5, "lon": 76.0}
+            center={"lat": 19.5, "lon": 76.0}
         )
         fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=380)
         st.plotly_chart(fig_map, use_container_width=True)
@@ -734,11 +735,12 @@ elif scope == "🇮🇳 All-India Metro Benchmark":
 
         # All-India Geospatial View
         st.subheader("🇮🇳 National Climate & Air Quality Distribution")
-        fig_in_map = px.scatter_mapbox(
+        map_func = getattr(px, "scatter_map", getattr(px, "scatter_mapbox", None))
+        fig_in_map = map_func(
             i_df, lat="lat", lon="lon", hover_name="City", hover_data=["State", "Temperature (°C)", "CPCB AQI", "Condition"],
             color="CPCB AQI", size="Temperature (°C)",
             color_continuous_scale="Viridis", size_max=20, zoom=3.8,
-            mapbox_style="carto-darkmatter", center={"lat": 22.0, "lon": 79.0}
+            center={"lat": 22.0, "lon": 79.0}
         )
         fig_in_map.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=400)
         st.plotly_chart(fig_in_map, use_container_width=True)
