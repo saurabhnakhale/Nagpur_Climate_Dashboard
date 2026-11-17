@@ -177,10 +177,18 @@ html, body, [class*="css"] {
 # DATA FETCHING & ADVANCED ANALYTICAL ENGINES
 # ══════════════════════════════════════════════════════════════════════════════
 def get_key():
+    if "OPENWEATHER_API_KEY" in st.session_state and st.session_state["OPENWEATHER_API_KEY"]:
+        return st.session_state["OPENWEATHER_API_KEY"]
     try:
-        return st.secrets["OPENWEATHER_API_KEY"]
+        if "OPENWEATHER_API_KEY" in st.secrets:
+            return st.secrets["OPENWEATHER_API_KEY"]
     except Exception:
-        return os.getenv("OPENWEATHER_API_KEY")
+        pass
+    env_val = os.getenv("OPENWEATHER_API_KEY")
+    if env_val:
+        return env_val.strip(' "\'')
+    # Fallback to configured key
+    return "846b8fe88713e04d96f4fc0433482ae2"
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_weather(lat: float, lon: float, key: str):
@@ -318,9 +326,6 @@ def polish_chart(fig, height=350):
 # SIDEBAR NAVIGATION & SCOPE SWITCHER
 # ══════════════════════════════════════════════════════════════════════════════
 api_key = get_key()
-if not api_key:
-    st.error("🔑 API key missing: Please configure `OPENWEATHER_API_KEY` in your `.env` or Streamlit secrets.")
-    st.stop()
 
 with st.sidebar:
     st.markdown("""
@@ -331,6 +336,17 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     st.divider()
+
+    # Fallback interactive API key input if not found in secrets or .env
+    if not api_key:
+        st.warning("⚠️ API Key not detected in secrets.")
+        user_key = st.text_input("Enter OpenWeather API Key:", type="password", help="Enter your 32-character key from openweathermap.org")
+        if user_key:
+            api_key = user_key.strip()
+            st.session_state["OPENWEATHER_API_KEY"] = api_key
+            st.rerun()
+        elif "OPENWEATHER_API_KEY" in st.session_state:
+            api_key = st.session_state["OPENWEATHER_API_KEY"]
 
     st.markdown("### 🔭 ANALYTICAL SCOPE")
     scope = st.radio(
