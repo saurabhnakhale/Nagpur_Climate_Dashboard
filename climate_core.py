@@ -379,6 +379,70 @@ def compute_dew_point(temp_c: float, rh: float) -> float:
     return round((b * alpha) / (a - alpha), 1)
 
 
+def compute_wbgt(temp_c: float, rh: float, uv_index: float = 4.0) -> dict:
+    """Compute Wet-Bulb Globe Temperature (WBGT) using Stull wet-bulb + solar globe estimate."""
+    rh_c = max(5.0, min(100.0, float(rh)))
+    t = float(temp_c)
+    tw = (
+        t * math.atan(0.151977 * math.sqrt(rh_c + 8.313659))
+        + math.atan(t + rh_c)
+        - math.atan(rh_c - 1.676331)
+        + 0.00391838 * (rh_c ** 1.5) * math.atan(0.023101 * rh_c)
+        - 4.686035
+    )
+    solar_boost = min(6.0, max(0.0, float(uv_index) * 0.65))
+    tg = t + solar_boost
+    wbgt = round(0.7 * tw + 0.2 * tg + 0.1 * t, 1)
+    if wbgt >= 30.0:
+        return {"wbgt": wbgt, "level": "Extreme (Work Halt)", "delta_color": "red"}
+    if wbgt >= 28.0:
+        return {"wbgt": wbgt, "level": "High Occupational Stress", "delta_color": "orange"}
+    if wbgt >= 25.0:
+        return {"wbgt": wbgt, "level": "Moderate Stress", "delta_color": "yellow"}
+    return {"wbgt": wbgt, "level": "Safe Work Window", "delta_color": "green"}
+
+
+def count_heatwave_metrics(max_temps: list[float], normal_max: float = 40.0) -> tuple[int, int]:
+    """Return (heatwave_days, max_consecutive_extreme_heat_days) for a series of daily max temps."""
+    hw_days = 0
+    cur_streak = 0
+    max_streak = 0
+    for tmax in max_temps:
+        if tmax >= 45.0 or (tmax >= 40.0 and (tmax - normal_max) >= 4.5):
+            hw_days += 1
+        if tmax >= 40.0:
+            cur_streak += 1
+            max_streak = max(max_streak, cur_streak)
+        else:
+            cur_streak = 0
+    return hw_days, max_streak
+
+
+NAGPUR_COOLING_CENTRES = [
+    {"Centre": "Sitabuldi Variety Square Shelter", "Zone": "Zone 6 - Gandhi Bagh", "Capacity": 180, "Status": "Standby / Ready", "lat": 21.1445, "lon": 79.0830},
+    {"Centre": "Cotton Market / Railway Hub", "Zone": "Zone 6 - Gandhi Bagh", "Capacity": 220, "Status": "Standby / Ready", "lat": 21.1495, "lon": 79.0915},
+    {"Centre": "Dhantoli Medical Cooling Kiosk", "Zone": "Zone 4 - Dhantoli", "Capacity": 150, "Status": "Standby / Ready", "lat": 21.1320, "lon": 79.0850},
+    {"Centre": "Lakadganj Pili Nadi Shade Hub", "Zone": "Zone 8 - Lakadganj", "Capacity": 140, "Status": "Standby / Ready", "lat": 21.1520, "lon": 79.1380},
+    {"Centre": "MIDC Hingna Worker Rest Shelter", "Zone": "Zone 8 - Lakadganj", "Capacity": 250, "Status": "Active (Industrial)", "lat": 21.1160, "lon": 79.0020},
+    {"Centre": "Dharampeth Civic Cooling Point", "Zone": "Zone 2 - Dharampeth", "Capacity": 120, "Status": "Standby / Ready", "lat": 21.1420, "lon": 79.0650},
+    {"Centre": "Ambazari Lakefront Mist Zone", "Zone": "Zone 1 - Laxmi Nagar", "Capacity": 160, "Status": "Standby / Ready", "lat": 21.1290, "lon": 79.0440},
+    {"Centre": "Ashi Nagar Transit Cooling Hub", "Zone": "Zone 9 - Ashi Nagar", "Capacity": 130, "Status": "Standby / Ready", "lat": 21.1850, "lon": 79.1200},
+]
+
+NAGPUR_HEAT_VULNERABILITY = [
+    {"Zone": "Zone 6 - Gandhi Bagh", "Vulnerable Pop": 68400, "Outdoor Workers (%)": 34, "Priority": "Critical", "LST Offset": 5.8},
+    {"Zone": "Zone 8 - Lakadganj", "Vulnerable Pop": 61200, "Outdoor Workers (%)": 38, "Priority": "Critical", "LST Offset": 5.4},
+    {"Zone": "Zone 7 - Satranjipura", "Vulnerable Pop": 54900, "Outdoor Workers (%)": 31, "Priority": "High", "LST Offset": 5.1},
+    {"Zone": "Zone 4 - Dhantoli", "Vulnerable Pop": 42300, "Outdoor Workers (%)": 22, "Priority": "High", "LST Offset": 3.6},
+    {"Zone": "Zone 5 - Nehru Nagar", "Vulnerable Pop": 46800, "Outdoor Workers (%)": 26, "Priority": "Moderate", "LST Offset": 3.1},
+    {"Zone": "Zone 9 - Ashi Nagar", "Vulnerable Pop": 49500, "Outdoor Workers (%)": 28, "Priority": "Moderate", "LST Offset": 2.4},
+    {"Zone": "Zone 3 - Hanuman Nagar", "Vulnerable Pop": 38100, "Outdoor Workers (%)": 20, "Priority": "Moderate", "LST Offset": 2.2},
+    {"Zone": "Zone 2 - Dharampeth", "Vulnerable Pop": 31200, "Outdoor Workers (%)": 16, "Priority": "Moderate", "LST Offset": 1.8},
+    {"Zone": "Zone 1 - Laxmi Nagar", "Vulnerable Pop": 27400, "Outdoor Workers (%)": 14, "Priority": "Low", "LST Offset": -1.4},
+    {"Zone": "Zone 10 - Mangalwari", "Vulnerable Pop": 29800, "Outdoor Workers (%)": 15, "Priority": "Low", "LST Offset": -1.2},
+]
+
+
 def deg_to_compass(deg: float | int) -> str:
     dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
     idx = int((float(deg) + 11.25) / 22.5) % 16
