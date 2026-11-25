@@ -30,10 +30,16 @@ page = st.navigation(
     {
         "Nagpur Urban Modules": [
             st.Page(
+                "app_pages/executive_overview.py",
+                title="Executive Climate Overview",
+                icon=":material/dashboard:",
+                default=True,
+                help="Command center summary across temperature, AQI, heat, flood, vector risk, and integrated scores.",
+            ),
+            st.Page(
                 "app_pages/live_weather.py",
                 title="Live Weather Monitoring",
                 icon=":material/partly_cloudy_day:",
-                default=True,
                 help="Real-time temperature, humidity, wind, pressure, and threshold gauges.",
             ),
             st.Page(
