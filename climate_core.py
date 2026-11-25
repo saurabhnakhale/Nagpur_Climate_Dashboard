@@ -1,6 +1,7 @@
+import math
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -12,6 +13,24 @@ load_dotenv()
 
 IST = ZoneInfo("Asia/Kolkata")
 BASE = "https://api.openweathermap.org/data/2.5"
+OPENMETEO_FORECAST = "https://api.open-meteo.com/v1/forecast"
+OPENMETEO_ARCHIVE = "https://archive-api.open-meteo.com/v1/archive"
+
+# Nagpur 30-year IMD monthly climatological normals (°C) for climate deviation analysis
+NAGPUR_CLIMATE_NORMALS = {
+    1: {"mean": 20.8, "max": 28.6, "min": 12.9},
+    2: {"mean": 23.6, "max": 31.6, "min": 15.5},
+    3: {"mean": 28.2, "max": 36.4, "min": 19.9},
+    4: {"mean": 33.1, "max": 40.9, "min": 25.2},
+    5: {"mean": 35.8, "max": 42.8, "min": 28.7},
+    6: {"mean": 32.1, "max": 37.9, "min": 26.3},
+    7: {"mean": 27.9, "max": 31.8, "min": 24.0},
+    8: {"mean": 27.3, "max": 30.8, "min": 23.7},
+    9: {"mean": 27.8, "max": 32.2, "min": 23.4},
+    10: {"mean": 26.5, "max": 32.6, "min": 20.4},
+    11: {"mean": 23.1, "max": 30.5, "min": 15.7},
+    12: {"mean": 20.4, "max": 28.4, "min": 12.4},
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ZONE-WISE & WARD-WISE LOCATION CATALOG (10 NMC ADMINISTRATIVE ZONES)
@@ -103,8 +122,9 @@ INDIA_METROS = {
     "Lucknow": {"lat": 26.8467, "lon": 80.9462, "state": "Uttar Pradesh", "zone": "North Gangetic"},
 }
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# API KEY & CACHED DATA FETCHERS (WITH FRESHNESS TIMESTAMPS)
+# API KEY, TIME RANGE & CACHED DATA FETCHERS
 # ══════════════════════════════════════════════════════════════════════════════
 def get_key() -> str:
     if st.session_state.get("OPENWEATHER_API_KEY"):
@@ -118,6 +138,30 @@ def get_key() -> str:
     if env_val:
         return env_val.strip(' "\'')
     return "846b8fe88713e04d96f4fc0433482ae2"
+
+
+def get_time_range_config() -> dict:
+    """Resolve the active sidebar time-range filter into dates and horizon mode."""
+    tr = st.session_state.get("time_range", "7 Days")
+    today = datetime.now(IST).date()
+
+    if tr == "24 Hours":
+        return {"label": "24 Hours", "mode": "hourly", "hours": 24, "start": today, "end": today + timedelta(days=1)}
+    if tr == "7 Days":
+        return {"label": "7 Days", "mode": "forecast_7d", "hours": 168, "start": today, "end": today + timedelta(days=6)}
+    if tr == "30 Days":
+        return {"label": "30 Days", "mode": "historical", "hours": 720, "start": today - timedelta(days=30), "end": today - timedelta(days=1)}
+    if tr == "1 Year":
+        return {"label": "1 Year", "mode": "historical", "hours": 8760, "start": today - timedelta(days=365), "end": today - timedelta(days=1)}
+
+    custom = st.session_state.get("custom_dates", (today - timedelta(days=14), today - timedelta(days=1)))
+    if isinstance(custom, (list, tuple)) and len(custom) == 2:
+        s_dt, e_dt = custom[0], custom[1]
+    else:
+        s_dt, e_dt = today - timedelta(days=14), today - timedelta(days=1)
+    if s_dt > e_dt:
+        s_dt, e_dt = e_dt, s_dt
+    return {"label": f"{s_dt:%d %b} – {e_dt:%d %b %y}", "mode": "historical", "hours": max(24, (e_dt - s_dt).days * 24), "start": s_dt, "end": e_dt}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -162,8 +206,68 @@ def fetch_air_with_ts(lat: float, lon: float, key: str):
         return None, time.time()
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_openmeteo_forecast(lat: float, lon: float) -> dict | None:
+    """Fetch 7-day daily + 168-hour forecast (UV, Dew Point, Wind Dir, Precip Prob)."""
+    try:
+        r = requests.get(
+            OPENMETEO_FORECAST,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "hourly": "temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,precipitation_probability,precipitation,uv_index,wind_speed_10m,wind_direction_10m,surface_pressure",
+                "daily": "temperature_2m_max,temperature_2m_min,uv_index_max,precipitation_sum,precipitation_probability_max,sunrise,sunset",
+                "timezone": "Asia/Kolkata",
+                "forecast_days": 7,
+            },
+            timeout=12,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_openmeteo_history(lat: float, lon: float, start_dt: date, end_dt: date) -> pd.DataFrame:
+    """Fetch historical daily climate data from Open-Meteo Archive for deviation analysis."""
+    today = datetime.now(IST).date()
+    safe_end = min(end_dt, today - timedelta(days=1))
+    safe_start = min(start_dt, safe_end)
+    try:
+        r = requests.get(
+            OPENMETEO_ARCHIVE,
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "start_date": safe_start.isoformat(),
+                "end_date": safe_end.isoformat(),
+                "daily": "temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum",
+                "timezone": "Asia/Kolkata",
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        daily = r.json().get("daily", {})
+        if not daily or not daily.get("time"):
+            return pd.DataFrame()
+        df = pd.DataFrame({
+            "Date": pd.to_datetime(daily["time"]),
+            "Max Temp (°C)": daily.get("temperature_2m_max", []),
+            "Min Temp (°C)": daily.get("temperature_2m_min", []),
+            "Mean Temp (°C)": daily.get("temperature_2m_mean", []),
+            "Rainfall (mm)": daily.get("precipitation_sum", []),
+        })
+        df["DateLabel"] = df["Date"].dt.strftime("%d %b %y")
+        df["Normal Mean (°C)"] = df["Date"].dt.month.map(lambda m: NAGPUR_CLIMATE_NORMALS[m]["mean"])
+        df["Normal Max (°C)"] = df["Date"].dt.month.map(lambda m: NAGPUR_CLIMATE_NORMALS[m]["max"])
+        df["Deviation (°C)"] = (df["Mean Temp (°C)"] - df["Normal Mean (°C)"]).round(2)
+        return df.dropna(subset=["Mean Temp (°C)"])
+    except Exception:
+        return pd.DataFrame()
+
+
 def get_active_location():
-    """Return currently selected zone, ward, and metadata from session_state."""
     zone = st.session_state.get("selected_zone", "All Nagpur (City Core)")
     wards = NAGPUR_ZONES_WARDS.get(zone, NAGPUR_ZONES_WARDS["All Nagpur (City Core)"])
     ward = st.session_state.get("selected_ward")
@@ -173,50 +277,114 @@ def get_active_location():
 
 
 def load_active_location_feeds():
-    """Fetch live weather, forecast, and air quality for the selected Zone & Ward."""
     zone, ward, loc = get_active_location()
     key = get_key()
     current_w, ts_w = fetch_weather_with_ts(loc["lat"], loc["lon"], key)
     forecast_w, ts_f = fetch_forecast_with_ts(loc["lat"], loc["lon"], key)
     air_w, ts_a = fetch_air_with_ts(loc["lat"], loc["lon"], key)
+    om_w = fetch_openmeteo_forecast(loc["lat"], loc["lon"])
     fetched_at = min(ts_w, ts_f, ts_a)
     st.session_state["last_fetch_epoch"] = fetched_at
     st.session_state["feed_live"] = bool(current_w)
-    return zone, ward, loc, current_w, forecast_w, air_w, fetched_at
+    return zone, ward, loc, current_w, forecast_w, air_w, om_w, fetched_at
 
 
-def parse_forecast_df(forecast_w: dict | None, temp_offset: float = 0.0, rain_offset: float = 0.0) -> pd.DataFrame:
+def parse_hourly_df(om_w: dict | None, forecast_w: dict | None, temp_offset: float = 0.0, rain_offset: float = 0.0) -> pd.DataFrame:
+    """Build unified hourly forecast DataFrame (168h from Open-Meteo, fallback to OpenWeather 3h)."""
+    if om_w and "hourly" in om_w and om_w["hourly"].get("time"):
+        h = om_w["hourly"]
+        df = pd.DataFrame({
+            "Timestamp": pd.to_datetime(h["time"]),
+            "Temperature (°C)": [round((x or 0) + temp_offset, 2) for x in h.get("temperature_2m", [])],
+            "Feels Like (°C)": [round((x or 0) + temp_offset, 2) for x in h.get("apparent_temperature", [])],
+            "Dew Point (°C)": [round((x or 0) + temp_offset * 0.4, 2) for x in h.get("dew_point_2m", [])],
+            "Humidity (%)": [int(x or 0) for x in h.get("relative_humidity_2m", [])],
+            "Rainfall (mm)": [round(max(0.0, float(x or 0) + (rain_offset / 168.0 if (x or 0) > 0 else 0.0)), 2) for x in h.get("precipitation", [])],
+            "Rain Prob (%)": [int(x or 0) for x in h.get("precipitation_probability", [])],
+            "UV Index": [round(float(x or 0), 1) for x in h.get("uv_index", [])],
+            "Wind Speed (km/h)": [round(float(x or 0), 1) for x in h.get("wind_speed_10m", [])],
+            "Wind Dir (°)": [int(x or 0) for x in h.get("wind_direction_10m", [])],
+            "Pressure (hPa)": [round(float(x or 1013), 1) for x in h.get("surface_pressure", [])],
+        })
+        df["TimeLabel"] = df["Timestamp"].dt.strftime("%d %b %H:%M")
+        df["Date"] = df["Timestamp"].dt.strftime("%d %b")
+        return df
+
     if not forecast_w or "list" not in forecast_w:
         return pd.DataFrame()
     rows = []
-    per_step_rain_adj = rain_offset / max(1, len(forecast_w["list"]))
     for it in forecast_w["list"]:
         ts = pd.to_datetime(it["dt"], unit="s", utc=True).tz_convert(IST)
-        raw_rain = float(it.get("rain", {}).get("3h", 0) or 0)
-        adj_rain = round(max(0.0, raw_rain + (per_step_rain_adj if raw_rain > 0 else 0.0)), 2)
         m = it.get("main", {})
+        t_val = round(float(m.get("temp", 0)) + temp_offset, 2)
+        rh_val = int(m.get("humidity", 0))
         rows.append({
             "Timestamp": ts,
             "TimeLabel": ts.strftime("%d %b %H:%M"),
             "Date": ts.strftime("%d %b"),
-            "Hour": ts.strftime("%H:%M"),
-            "Temperature (°C)": round(float(m.get("temp", 0)) + temp_offset, 2),
+            "Temperature (°C)": t_val,
             "Feels Like (°C)": round(float(m.get("feels_like", 0)) + temp_offset, 2),
-            "Min Temp (°C)": round(float(m.get("temp_min", 0)) + temp_offset, 2),
-            "Max Temp (°C)": round(float(m.get("temp_max", 0)) + temp_offset, 2),
-            "Humidity (%)": int(m.get("humidity", 0)),
-            "Rainfall (mm/3h)": adj_rain,
-            "Rainfall (mm/h)": round(adj_rain / 3.0, 2),
-            "Pressure (hPa)": int(m.get("pressure", 0)),
+            "Dew Point (°C)": compute_dew_point(t_val, rh_val),
+            "Humidity (%)": rh_val,
+            "Rainfall (mm)": round(float(it.get("rain", {}).get("3h", 0) or 0), 2),
+            "Rain Prob (%)": int(round((it.get("pop", 0) or 0) * 100)),
+            "UV Index": 0.0,
             "Wind Speed (km/h)": round(float(it.get("wind", {}).get("speed", 0) or 0) * 3.6, 1),
-            "Condition": it.get("weather", [{}])[0].get("description", "").title(),
+            "Wind Dir (°)": int(it.get("wind", {}).get("deg", 0) or 0),
+            "Pressure (hPa)": int(m.get("pressure", 1013)),
         })
     return pd.DataFrame(rows)
 
 
+def parse_daily_7d_df(om_w: dict | None, hourly_df: pd.DataFrame, temp_offset: float = 0.0, rain_offset: float = 0.0) -> pd.DataFrame:
+    """Build 7-day daily forecast DataFrame with min/max temp, UV max, rain sum, prob, sunrise/sunset."""
+    if om_w and "daily" in om_w and om_w["daily"].get("time"):
+        d = om_w["daily"]
+        df = pd.DataFrame({
+            "DateRaw": pd.to_datetime(d["time"]),
+            "Max Temp (°C)": [round((x or 0) + temp_offset, 1) for x in d.get("temperature_2m_max", [])],
+            "Min Temp (°C)": [round((x or 0) + temp_offset, 1) for x in d.get("temperature_2m_min", [])],
+            "UV Max": [round(float(x or 0), 1) for x in d.get("uv_index_max", [])],
+            "Rainfall (mm)": [round(max(0.0, float(x or 0) + (rain_offset / 7.0 if (x or 0) > 0 else 0.0)), 1) for x in d.get("precipitation_sum", [])],
+            "Rain Prob (%)": [int(x or 0) for x in d.get("precipitation_probability_max", [])],
+            "Sunrise": [s.split("T")[1] if "T" in str(s) else str(s) for s in d.get("sunrise", [])],
+            "Sunset": [s.split("T")[1] if "T" in str(s) else str(s) for s in d.get("sunset", [])],
+        })
+        df["Date"] = df["DateRaw"].dt.strftime("%a %d %b")
+        df["Normal Max (°C)"] = df["DateRaw"].dt.month.map(lambda m: NAGPUR_CLIMATE_NORMALS[m]["max"])
+        df["Normal Min (°C)"] = df["DateRaw"].dt.month.map(lambda m: NAGPUR_CLIMATE_NORMALS[m]["min"])
+        return df
+
+    if hourly_df.empty:
+        return pd.DataFrame()
+    agg = hourly_df.groupby("Date", sort=False, as_index=False).agg(
+        **{
+            "Max Temp (°C)": ("Temperature (°C)", "max"),
+            "Min Temp (°C)": ("Temperature (°C)", "min"),
+            "UV Max": ("UV Index", "max"),
+            "Rainfall (mm)": ("Rainfall (mm)", "sum"),
+            "Rain Prob (%)": ("Rain Prob (%)", "max"),
+        }
+    )
+    return agg
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICAL ENGINES & CONDITIONAL RISK COLOR HELPERS
+# METEOROLOGICAL HELPERS & RISK COLOR ENGINES
 # ══════════════════════════════════════════════════════════════════════════════
+def compute_dew_point(temp_c: float, rh: float) -> float:
+    rh = max(1.0, min(100.0, float(rh)))
+    a, b = 17.625, 243.04
+    alpha = math.log(rh / 100.0) + (a * temp_c) / (b + temp_c)
+    return round((b * alpha) / (a - alpha), 1)
+
+
+def deg_to_compass(deg: float | int) -> str:
+    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    idx = int((float(deg) + 11.25) / 22.5) % 16
+    return dirs[idx]
+
+
 def _sub_index(conc: float, breakpoints: list) -> float:
     for c_low, c_high, i_low, i_high in breakpoints:
         if c_low <= conc <= c_high:
@@ -302,15 +470,31 @@ def risk_color_pressure(hpa: float) -> str:
     return "green"
 
 
-def risk_color_rain(mm_3h: float) -> str:
-    if mm_3h >= 30: return "red"
-    if mm_3h >= 15: return "orange"
-    if mm_3h >= 5:  return "yellow"
+def risk_color_rain(mm_val: float) -> str:
+    if mm_val >= 30: return "red"
+    if mm_val >= 15: return "orange"
+    if mm_val >= 5:  return "yellow"
     return "green"
 
 
+def risk_color_uv(uv: float) -> tuple[str, str]:
+    if uv >= 11: return "Extreme", "red"
+    if uv >= 8:  return "Very High", "red"
+    if uv >= 6:  return "High", "orange"
+    if uv >= 3:  return "Moderate", "yellow"
+    return "Low", "green"
+
+
+def risk_color_dewpoint(dp: float) -> tuple[str, str]:
+    if dp >= 24: return "Oppressive", "red"
+    if dp >= 20: return "Muggy", "orange"
+    if dp >= 16: return "Noticeable", "yellow"
+    if dp >= 10: return "Comfortable", "green"
+    return "Dry", "blue"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# RESPONSIVE ECHARTS GAUGE & LIVE STATUS BAR
+# RESPONSIVE ECHARTS GAUGE, WIND ROSE & LIVE STATUS BAR
 # ══════════════════════════════════════════════════════════════════════════════
 def render_echarts_gauge(
     title: str,
@@ -322,7 +506,6 @@ def render_echarts_gauge(
     alt: str,
     height: int = 230,
 ):
-    """Render a responsive ECharts gauge with meaningful color-coded threshold bands."""
     option = {
         "tooltip": {"formatter": f"{{b}}: {{c}} {unit}"},
         "series": [
@@ -355,18 +538,59 @@ def render_echarts_gauge(
     st.echarts_chart(option, height=height, alt=alt)
 
 
+def render_wind_rose(hourly_df: pd.DataFrame, height: int = 280):
+    """Render an ECharts 16-point polar wind rose from hourly wind speed & direction."""
+    compass_16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    bins = {d: [0, 0, 0] for d in compass_16}  # <10, 10-20, >20 km/h
+
+    if not hourly_df.empty and "Wind Dir (°)" in hourly_df.columns:
+        for _, row in hourly_df.iterrows():
+            c = deg_to_compass(row["Wind Dir (°)"])
+            spd = float(row["Wind Speed (km/h)"])
+            if spd < 10:
+                bins[c][0] += 1
+            elif spd < 20:
+                bins[c][1] += 1
+            else:
+                bins[c][2] += 1
+
+    s_low = [bins[d][0] for d in compass_16]
+    s_mid = [bins[d][1] for d in compass_16]
+    s_high = [bins[d][2] for d in compass_16]
+
+    st.echarts_chart(
+        {
+            "tooltip": {"trigger": "item"},
+            "legend": {"bottom": 0, "textStyle": {"color": "#cbd5e1", "fontSize": 10}},
+            "polar": {"radius": ["14%", "74%"]},
+            "angleAxis": {
+                "type": "category",
+                "data": compass_16,
+                "startAngle": 90,
+                "axisLabel": {"color": "#94a3b8", "fontSize": 10},
+            },
+            "radiusAxis": {"axisLabel": {"show": False}},
+            "series": [
+                {"type": "bar", "data": s_low, "coordinateSystem": "polar", "name": "< 10 km/h", "stack": "w", "itemStyle": {"color": "#2dd4bf"}},
+                {"type": "bar", "data": s_mid, "coordinateSystem": "polar", "name": "10–20 km/h", "stack": "w", "itemStyle": {"color": "#3b82f6"}},
+                {"type": "bar", "data": s_high, "coordinateSystem": "polar", "name": "> 20 km/h", "stack": "w", "itemStyle": {"color": "#f59e0b"}},
+            ],
+        },
+        height=height,
+        alt="16-point compass wind rose showing frequency and wind speed bands",
+    )
+
+
 def render_live_status_strip():
-    """Live status, data source, freshness, and automatic refresh countdown."""
+    """Live status, data source, active time range, freshness, and refresh countdown."""
     interval_sec = st.session_state.get("auto_refresh_sec", 300)
     last_epoch = st.session_state.get("last_fetch_epoch", time.time())
     is_live = st.session_state.get("feed_live", True)
     zone, ward, loc = get_active_location()
+    tr_cfg = get_time_range_config()
 
     elapsed = max(0, int(time.time() - last_epoch))
-    if elapsed < 60:
-        fresh_str = f"{elapsed}s ago"
-    else:
-        fresh_str = f"{elapsed // 60}m {elapsed % 60}s ago"
+    fresh_str = f"{elapsed}s ago" if elapsed < 60 else f"{elapsed // 60}m {elapsed % 60}s ago"
 
     if interval_sec > 0 and elapsed >= interval_sec:
         st.cache_data.clear()
@@ -379,8 +603,9 @@ def render_live_status_strip():
             else:
                 st.badge("Offline", icon=":material/cloud_off:", color="red")
 
-            st.caption(f":material/location_on: **{zone}** · {ward} ({loc['lat']:.4f}°N, {loc['lon']:.4f}°E)")
-            st.caption(":material/database: Source: OpenWeatherMap · IMD · CPCB")
+            st.caption(f":material/location_on: **{zone}** · {ward}")
+            st.caption(f":material/date_range: Window: **{tr_cfg['label']}**")
+            st.caption(":material/database: OpenWeather · Open-Meteo · IMD · CPCB")
             st.caption(f":material/schedule: Updated {fresh_str}")
 
             if interval_sec > 0:

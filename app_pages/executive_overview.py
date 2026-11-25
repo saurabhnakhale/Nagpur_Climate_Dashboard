@@ -1,37 +1,33 @@
 import streamlit as st
-import pandas as pd
 
 from climate_core import (
     load_active_location_feeds,
-    parse_forecast_df,
+    parse_hourly_df,
     compute_indian_cpcb_aqi,
     evaluate_imd_heat,
 )
 
-zone, ward, loc, current_w, forecast_w, air_w, _ = load_active_location_feeds()
+zone, ward, loc, current_w, forecast_w, air_w, om_w, _ = load_active_location_feeds()
 
 if not current_w:
     st.error("Unable to retrieve live telemetry for the selected location.", icon=":material/cloud_off:")
     st.stop()
 
-# ── Parse live atmospheric, AQI, rainfall, and vector metrics ─────────────────
 main = current_w.get("main", {})
 temp = round(float(main.get("temp", 0)) + loc["temp_offset"], 1)
 feels = round(float(main.get("feels_like", 0)) + loc["temp_offset"], 1)
 humidity = int(main.get("humidity", 0))
 
-f_df = parse_forecast_df(forecast_w, temp_offset=loc["temp_offset"], rain_offset=loc["rain_offset"])
-temp_trend = f_df.head(8)["Temperature (°C)"].tolist() if not f_df.empty else [temp]
-rain_total = round(float(f_df["Rainfall (mm/3h)"].sum()), 1) if not f_df.empty else 0.0
-rain_peak_3h = round(float(f_df["Rainfall (mm/3h)"].max()), 1) if not f_df.empty else 0.0
-rain_trend = f_df.head(8)["Rainfall (mm/3h)"].tolist() if not f_df.empty else [rain_total]
+h_df = parse_hourly_df(om_w, forecast_w, temp_offset=loc["temp_offset"], rain_offset=loc["rain_offset"])
+temp_trend = h_df.head(24)["Temperature (°C)"].tolist() if not h_df.empty else [temp]
+rain_total = round(float(h_df.head(120)["Rainfall (mm)"].sum()), 1) if not h_df.empty else 0.0
+rain_peak_3h = round(float(h_df.head(120)["Rainfall (mm)"].rolling(3).sum().max() or 0.0), 1) if len(h_df) >= 3 else 0.0
+rain_trend = h_df.head(24)["Rainfall (mm)"].tolist() if not h_df.empty else [rain_total]
 
 air_comp = air_w.get("list", [{}])[0].get("components", {}) if air_w else {}
 cpcb = compute_indian_cpcb_aqi(air_comp)
 aqi_val = cpcb["aqi"] if cpcb["aqi"] is not None else 0
 
-# ── Compute 5 Integrated Risk Scores (0–100) ──────────────────────────────────
-# 1. Heat stress (0–100)
 heat_meta = evaluate_imd_heat(temp)
 heat_score = round(max(0, min(100, ((max(temp, feels) - 22.0) / 26.0) * 100)))
 if heat_score >= 70:
@@ -43,10 +39,8 @@ elif heat_score >= 35:
 else:
     heat_level, heat_col = "Low", "green"
 
-# 2. Air pollution (CPCB NAQI 0–500 mapped to 0–100, with 300+ near 100)
 air_score = round(max(0, min(100, (aqi_val / 300.0) * 100)))
 
-# 3. Urban flooding (rainfall + ward drainage baseline)
 drain_base = {"Low": 8, "Moderate": 18, "High": 32, "Critical": 45}.get(loc["drainage_risk"], 18)
 rain_load = min(55, (rain_peak_3h * 1.5) + (rain_total * 0.35))
 flood_score = round(max(0, min(100, drain_base + rain_load)))
@@ -59,7 +53,6 @@ elif flood_score >= 28:
 else:
     flood_level, flood_col = "Low", "green"
 
-# 4. Vector-borne diseases (Environmental Suitability Index 0–100)
 temp_suit = max(0.0, min(1.0, 1.0 - abs(temp - 27.0) / 15.0))
 hum_suit = min(1.0, humidity / 70.0)
 rain_suit = min(1.0, rain_total / 25.0)
@@ -71,13 +64,11 @@ elif vector_score >= 40:
 else:
     vector_level, vector_col = "Low", "green"
 
-# 5. Water scarcity (heat + dryness + low rain)
 dryness = max(0.0, (70.0 - humidity) / 50.0)
 rain_deficit = max(0.0, 1.0 - (rain_total / 20.0))
 heat_evap = max(0.0, (temp - 25.0) / 20.0)
 scarcity_score = round(max(5, min(100, ((dryness * 0.45) + (rain_deficit * 0.35) + (heat_evap * 0.20)) * 100)))
 
-# Active Weather Alerts count
 active_alerts = []
 if heat_score >= 50:
     active_alerts.append("High Heat")
@@ -91,12 +82,10 @@ alert_count = len(active_alerts)
 alert_col = "red" if alert_count >= 3 else ("orange" if alert_count == 2 else ("yellow" if alert_count == 1 else "green"))
 alert_desc = ", ".join(active_alerts) if active_alerts else "All clear"
 
-# ── Command Center Subheader Row ──────────────────────────────────────────────
 with st.container(horizontal=True, vertical_alignment="center"):
     st.markdown(f"**Nagpur Climate Command Center** · Integrated environmental and public health surveillance for **{ward}** ({zone})")
     st.badge("Live telemetry", icon=":material/sensors:", color="green")
 
-# ── 3x2 Executive Summary KPI Grid ────────────────────────────────────────────
 with st.grid(3, min_column_width=230, gap="small"):
     st.metric(
         "Temperature",
@@ -163,13 +152,14 @@ with st.grid(3, min_column_width=230, gap="small"):
         height="stretch",
     )
 
-# ── Integrated Risk Assessment (Horizontal Progress Bars 0–100) ───────────────
+
 def _bar_color(score: int) -> str:
     if score >= 70:
         return "#ef4444"
     if score >= 35:
         return "#f59e0b"
     return "#10b981"
+
 
 risk_items = [
     ("Water scarcity", scarcity_score),
@@ -224,11 +214,10 @@ with st.container(border=True):
         alt="Integrated risk assessment bars for heat stress, air pollution, urban flooding, vector-borne diseases, and water scarcity",
     )
 
-# ── Quick Module Navigation Links ─────────────────────────────────────────────
 with st.container(horizontal=True, gap="small"):
     st.page_link("app_pages/live_weather.py", label="Live Weather", icon=":material/partly_cloudy_day:", width="stretch")
     st.page_link("app_pages/heat_impact.py", label="Heat Impact", icon=":material/thermostat:", width="stretch")
     st.page_link("app_pages/rainfall_flood.py", label="Rainfall & Flood", icon=":material/water_drop:", width="stretch")
     st.page_link("app_pages/vector_disease.py", label="Vector Risk", icon=":material/coronavirus:", width="stretch")
     st.page_link("app_pages/air_quality.py", label="Air Quality", icon=":material/air:", width="stretch")
-    st.page_link("app_pages/climate_risk_map.py", label="Risk Map", icon=":material/map:", width="stretch")
+    st.page_link("app_pages/climate_risk_map.py", label="Risk Map & Radar", icon=":material/map:", width="stretch")

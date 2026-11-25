@@ -1,7 +1,9 @@
 import time
+from datetime import datetime, timedelta
 import streamlit as st
 
 from climate_core import (
+    IST,
     NAGPUR_ZONES_WARDS,
     render_live_status_strip,
 )
@@ -14,10 +16,15 @@ st.set_page_config(
 )
 
 # ── Initialize session state ──────────────────────────────────────────────────
+today_ist = datetime.now(IST).date()
 if "selected_zone" not in st.session_state:
     st.session_state["selected_zone"] = "All Nagpur (City Core)"
 if "selected_ward" not in st.session_state:
     st.session_state["selected_ward"] = "All Wards (Central Observatory)"
+if "time_range" not in st.session_state:
+    st.session_state["time_range"] = "7 Days"
+if "custom_dates" not in st.session_state:
+    st.session_state["custom_dates"] = (today_ist - timedelta(days=14), today_ist - timedelta(days=1))
 if "auto_refresh_sec" not in st.session_state:
     st.session_state["auto_refresh_sec"] = 300
 if "last_fetch_epoch" not in st.session_state:
@@ -40,19 +47,19 @@ page = st.navigation(
                 "app_pages/live_weather.py",
                 title="Live Weather Monitoring",
                 icon=":material/partly_cloudy_day:",
-                help="Real-time temperature, humidity, wind, pressure, and threshold gauges.",
+                help="Hourly & 7-day forecast, UV index, dew point, sunrise/sunset, wind rose, and threshold gauges.",
             ),
             st.Page(
                 "app_pages/heat_impact.py",
                 title="Heat Impact Analysis",
                 icon=":material/thermostat:",
-                help="Diurnal max/min trends, heat index, and IMD Vidarbha heatwave alerts.",
+                help="Daily min/max, historical temperature deviation, UV exposure, and IMD Vidarbha heatwave alerts.",
             ),
             st.Page(
                 "app_pages/rainfall_flood.py",
                 title="Rainfall & Flood Impact",
                 icon=":material/water_drop:",
-                help="Hourly/daily precipitation, accumulation, and waterlogging indicators.",
+                help="Rainfall probability, hourly/daily accumulation, historical rain, and waterlogging indicators.",
             ),
             st.Page(
                 "app_pages/vector_disease.py",
@@ -70,7 +77,7 @@ page = st.navigation(
                 "app_pages/climate_risk_map.py",
                 title="Climate Risk Map",
                 icon=":material/map:",
-                help="Zone-wise and ward-wise thermal, rainfall, and drainage risk map.",
+                help="Zone-wise risk map and live weather radar & satellite tracking.",
             ),
         ],
         "Regional & National": [
@@ -85,7 +92,7 @@ page = st.navigation(
     position="sidebar",
 )
 
-# ── Sidebar: global location selector + auto-refresh controls only ────────────
+# ── Sidebar: location selector, dynamic time-range filter, auto-refresh ───────
 with st.sidebar:
     st.divider()
     st.markdown("**Location scope**")
@@ -111,6 +118,31 @@ with st.sidebar:
         key="ward_selector_widget",
     )
     st.session_state["selected_ward"] = selected_ward
+
+    st.divider()
+    st.markdown("**Time range**")
+    time_options = ["24 Hours", "7 Days", "30 Days", "1 Year", "Custom Date Range"]
+    selected_tr = st.selectbox(
+        "Analysis window",
+        time_options,
+        index=time_options.index(st.session_state["time_range"])
+        if st.session_state["time_range"] in time_options
+        else 1,
+        label_visibility="collapsed",
+        key="time_range_widget",
+    )
+    st.session_state["time_range"] = selected_tr
+
+    if selected_tr == "Custom Date Range":
+        custom_val = st.date_input(
+            "Select date range",
+            value=st.session_state["custom_dates"],
+            min_value=today_ist - timedelta(days=730),
+            max_value=today_ist - timedelta(days=1),
+            key="custom_dates_widget",
+        )
+        if isinstance(custom_val, (list, tuple)) and len(custom_val) == 2:
+            st.session_state["custom_dates"] = custom_val
 
     st.divider()
     st.markdown("**Auto-refresh**")

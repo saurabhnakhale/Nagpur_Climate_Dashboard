@@ -4,11 +4,11 @@ import pandas as pd
 
 from climate_core import (
     load_active_location_feeds,
-    parse_forecast_df,
+    parse_hourly_df,
     render_echarts_gauge,
 )
 
-zone, ward, loc, current_w, forecast_w, _, _ = load_active_location_feeds()
+zone, ward, loc, current_w, forecast_w, _, om_w, _ = load_active_location_feeds()
 
 if not current_w:
     st.error("Unable to retrieve environmental data for vector risk modeling.", icon=":material/cloud_off:")
@@ -17,10 +17,9 @@ if not current_w:
 main = current_w.get("main", {})
 temp = round(float(main.get("temp", 0)) + loc["temp_offset"], 1)
 humidity = int(main.get("humidity", 0))
-f_df = parse_forecast_df(forecast_w, temp_offset=loc["temp_offset"], rain_offset=loc["rain_offset"])
-total_rain = round(float(f_df["Rainfall (mm/3h)"].sum()), 1) if not f_df.empty else 0.0
+h_df = parse_hourly_df(om_w, forecast_w, temp_offset=loc["temp_offset"], rain_offset=loc["rain_offset"])
+total_rain = round(float(h_df.head(120)["Rainfall (mm)"].sum()), 1) if not h_df.empty else 0.0
 
-# Environmental Suitability Index (0–100) for Aedes & Anopheles
 temp_suit = max(0.0, min(1.0, 1.0 - abs(temp - 27.0) / 15.0))
 hum_suit = min(1.0, humidity / 70.0)
 rain_suit = min(1.0, total_rain / 25.0)
@@ -49,7 +48,7 @@ with st.grid(4, min_column_width=210, gap="small"):
         delta="Optimum 24–30 °C",
         delta_color="red" if 22 <= temp <= 32 else "green",
         icon=":material/thermostat:",
-        chart_data=f_df.head(10)["Temperature (°C)"].tolist() if not f_df.empty else [temp],
+        chart_data=h_df.head(24)["Temperature (°C)"].tolist() if not h_df.empty else [temp],
         chart_type="line",
         border=True,
         height="stretch",
@@ -60,7 +59,7 @@ with st.grid(4, min_column_width=210, gap="small"):
         delta="Breeding > 60%",
         delta_color="red" if humidity >= 65 else ("yellow" if humidity >= 50 else "green"),
         icon=":material/humidity_percentage:",
-        chart_data=f_df.head(10)["Humidity (%)"].tolist() if not f_df.empty else [humidity],
+        chart_data=h_df.head(24)["Humidity (%)"].tolist() if not h_df.empty else [humidity],
         chart_type="area",
         border=True,
         height="stretch",
@@ -71,7 +70,7 @@ with st.grid(4, min_column_width=210, gap="small"):
         delta="5-day accumulation",
         delta_color="orange" if total_rain >= 15 else "green",
         icon=":material/water_drop:",
-        chart_data=f_df.head(10)["Rainfall (mm/3h)"].tolist() if not f_df.empty else [total_rain],
+        chart_data=h_df.head(24)["Rainfall (mm)"].tolist() if not h_df.empty else [total_rain],
         chart_type="bar",
         border=True,
         height="stretch",

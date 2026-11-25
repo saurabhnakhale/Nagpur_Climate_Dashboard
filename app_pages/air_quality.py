@@ -7,7 +7,7 @@ from climate_core import (
     render_echarts_gauge,
 )
 
-zone, ward, loc, _, _, air_w, _ = load_active_location_feeds()
+zone, ward, loc, _, _, air_w, _, _ = load_active_location_feeds()
 air_comp = air_w.get("list", [{}])[0].get("components", {}) if air_w else {}
 cpcb = compute_indian_cpcb_aqi(air_comp)
 
